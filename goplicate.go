@@ -56,6 +56,7 @@ func (w *Walker) add(path string) error {
 			}
 
 			if _, ok := w.base[hash]; ok {
+				fmt.Println("Found", name)
 				w.extra = append(w.extra, name)
 			} else {
 				w.base[hash] = name
