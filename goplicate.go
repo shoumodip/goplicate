@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func hashFile(path string) (string, error) {
@@ -73,21 +71,11 @@ func (w *Walker) save(path string) error {
 		return err
 	}
 
-	file, err := os.Create(filepath.Join(path, "list.txt"))
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	defer writer.Flush()
-
 	for i, item := range w.extra {
-		err = os.Rename(item, filepath.Join(path, fmt.Sprint(i)))
+		err = os.Symlink(item, filepath.Join(path, fmt.Sprint(i)))
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(writer, item)
 	}
 
 	return nil
@@ -96,11 +84,11 @@ func (w *Walker) save(path string) error {
 func usage() {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  "+os.Args[0], "MODE PATH")
+	fmt.Fprintln(os.Stderr, "  "+os.Args[0], "MODE DIR")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Modes:")
-	fmt.Fprintln(os.Stderr, "  gather   Gather duplicates into PATH")
-	fmt.Fprintln(os.Stderr, "  restore  Restore gathered duplicates from PATH")
+	fmt.Fprintln(os.Stderr, "  gather  Gather duplicates into DIR")
+	fmt.Fprintln(os.Stderr, "  delete  Delete gathered duplicates in DIR")
 }
 
 func handleError(err error) {
@@ -126,22 +114,20 @@ func main() {
 		handleError(walker.save(base))
 		fmt.Println("Gathered", len(walker.extra), "duplicates into '"+base+"'")
 
-	case "restore":
+	case "delete":
 		base := os.Args[2]
 
-		data, err := os.ReadFile(filepath.Join(base, "list.txt"))
+		items, err := os.ReadDir(base)
 		handleError(err)
 
-		list := strings.Split(string(data), "\n")
-		for i, path := range list {
-			if path == "" {
-				continue
-			}
-			handleError(os.Rename(filepath.Join(base, fmt.Sprint(i)), path))
+		for _, item := range items {
+			path, err := os.Readlink(filepath.Join(base, item.Name()))
+			handleError(err)
+			handleError(os.Remove(path))
 		}
 
 		handleError(os.RemoveAll(base))
-		fmt.Println("Extracted", len(list)-1, "duplicates from '"+base+"'")
+		fmt.Println("Deleted", len(items), "duplicates from '"+base+"'")
 
 	default:
 		fmt.Fprintln(os.Stderr, "Error: invalid mode '"+mode+"'")
