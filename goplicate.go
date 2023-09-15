@@ -24,13 +24,13 @@ func hashFile(path string) (string, error) {
 }
 
 type Walker struct {
-	base  map[string]string
+	base  map[string]struct{}
 	extra []string
 }
 
 func newWalker() Walker {
 	return Walker{
-		base:  map[string]string{},
+		base:  map[string]struct{}{},
 		extra: []string{},
 	}
 }
@@ -57,7 +57,7 @@ func (w *Walker) add(path string) error {
 				fmt.Println("Found", name)
 				w.extra = append(w.extra, name)
 			} else {
-				w.base[hash] = name
+				w.base[hash] = struct{}{}
 			}
 		}
 	}
