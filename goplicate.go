@@ -72,7 +72,12 @@ func (w *Walker) save(path string) error {
 	}
 
 	for i, item := range w.extra {
-		err = os.Symlink(item, filepath.Join(path, fmt.Sprint(i)))
+		abs, err := filepath.Abs(item)
+		if err != nil {
+			return err
+		}
+
+		err = os.Symlink(abs, filepath.Join(path, fmt.Sprint(i)))
 		if err != nil {
 			return err
 		}
