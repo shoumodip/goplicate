@@ -1,12 +1,15 @@
 package main
 
 import (
-	"crypto/sha256"
+	"bytes"
+	"crypto/md5"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 )
+
+const MaxHashBytes = 4096
 
 func hashFile(path string) (string, error) {
 	file, err := os.Open(path)
@@ -15,85 +18,129 @@ func hashFile(path string) (string, error) {
 	}
 	defer file.Close()
 
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
+	hash := md5.New()
+	if _, err = io.CopyN(hash, file, MaxHashBytes); err != nil && err != io.EOF {
 		return "", err
 	}
 
 	return string(hash.Sum(nil)), nil
 }
 
-type Walker struct {
-	base  map[string]struct{}
-	extra []string
+type File struct {
+	path string
+	hash string
 }
 
-func newWalker() Walker {
-	return Walker{
-		base:  map[string]struct{}{},
-		extra: []string{},
-	}
-}
+func gatherDuplicates(dir string) error {
+	list := map[int64][]File{}
+	items := []string{}
 
-func (w *Walker) add(path string) error {
-	items, err := os.ReadDir(path)
-	if err != nil {
-		return err
-	}
-
-	for _, item := range items {
-		name := filepath.Join(path, item.Name())
-		if item.IsDir() {
-			if err = w.add(name); err != nil {
-				return err
-			}
-		} else {
-			hash, err := hashFile(name)
-			if err != nil {
-				return err
-			}
-
-			if _, ok := w.base[hash]; ok {
-				fmt.Println("Found", name)
-				w.extra = append(w.extra, name)
-			} else {
-				w.base[hash] = struct{}{}
-			}
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
-	}
 
-	return nil
-}
+		if !info.IsDir() {
+			size := info.Size()
+			if prev, ok := list[size]; ok {
+				hash, err := hashFile(path)
+				if err != nil {
+					return err
+				}
 
-func (w *Walker) save(path string) error {
-	err := os.MkdirAll(path, os.ModePerm)
+				for _, item := range prev {
+					if item.hash == "" {
+						item.hash, err = hashFile(item.path)
+						if err != nil {
+							return err
+						}
+					}
+
+					if item.hash == hash {
+						prev, err := os.ReadFile(item.path)
+						if err != nil {
+							return err
+						}
+
+						this, err := os.ReadFile(path)
+						if err != nil {
+							return err
+						}
+
+						if bytes.Equal(prev, this) {
+							fmt.Println("Found", path)
+							items = append(items, path)
+						}
+					}
+				}
+			}
+
+			list[size] = append(list[size], File{path: path, hash: ""})
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		return err
 	}
 
-	for i, item := range w.extra {
+	err = os.MkdirAll(dir, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	for i, item := range items {
 		abs, err := filepath.Abs(item)
 		if err != nil {
 			return err
 		}
 
-		err = os.Symlink(abs, filepath.Join(path, fmt.Sprint(i)))
+		err = os.Symlink(abs, filepath.Join(dir, fmt.Sprint(i)))
 		if err != nil {
 			return err
 		}
 	}
 
+	fmt.Println("Gathered", len(items), "duplicates into '"+dir+"'")
 	return nil
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr)
+func deleteDuplicates(dir string) error {
+	items, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		path, err := os.Readlink(filepath.Join(dir, item.Name()))
+		if err != nil {
+			return err
+		}
+
+		err = os.Remove(path)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = os.RemoveAll(dir)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Deleted", len(items), "duplicates from '"+dir+"'")
+	return nil
+}
+
+func showUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  "+os.Args[0], "MODE DIR")
+	fmt.Fprintln(os.Stderr, "  goplicate MODE DIR")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Modes:")
 	fmt.Fprintln(os.Stderr, "  gather  Gather duplicates into DIR")
 	fmt.Fprintln(os.Stderr, "  delete  Delete gathered duplicates in DIR")
+	os.Exit(1)
 }
 
 func handleError(err error) {
@@ -106,36 +153,20 @@ func handleError(err error) {
 func main() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "Error: insufficient arguments")
-		usage()
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr)
+		showUsage()
 	}
 
-	mode := os.Args[1]
-	switch mode {
+	switch mode := os.Args[1]; mode {
 	case "gather":
-		base := os.Args[2]
-		walker := newWalker()
-		handleError(walker.add("."))
-		handleError(walker.save(base))
-		fmt.Println("Gathered", len(walker.extra), "duplicates into '"+base+"'")
+		handleError(gatherDuplicates(os.Args[2]))
 
 	case "delete":
-		base := os.Args[2]
-
-		items, err := os.ReadDir(base)
-		handleError(err)
-
-		for _, item := range items {
-			path, err := os.Readlink(filepath.Join(base, item.Name()))
-			handleError(err)
-			handleError(os.Remove(path))
-		}
-
-		handleError(os.RemoveAll(base))
-		fmt.Println("Deleted", len(items), "duplicates from '"+base+"'")
+		handleError(deleteDuplicates(os.Args[2]))
 
 	default:
 		fmt.Fprintln(os.Stderr, "Error: invalid mode '"+mode+"'")
-		usage()
+		fmt.Fprintln(os.Stderr)
+		showUsage()
 	}
 }
