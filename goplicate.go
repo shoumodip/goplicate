@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const MaxHashBytes = 4096
@@ -32,10 +34,29 @@ type File struct {
 }
 
 func gatherDuplicates(dir string) error {
-	list := map[int64][]File{}
-	items := []string{}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
 
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	if strings.HasPrefix(dir, cwd) {
+		return errors.New("cannot gather duplicates into directory inside current directory")
+	}
+
+	err = os.MkdirAll(dir, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	list := map[int64][]File{}
+	count := 0
+
+	err = filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -69,7 +90,18 @@ func gatherDuplicates(dir string) error {
 
 						if bytes.Equal(prev, this) {
 							fmt.Println("Found", path)
-							items = append(items, path)
+
+							abs, err := filepath.Abs(path)
+							if err != nil {
+								return err
+							}
+
+							err = os.Symlink(abs, filepath.Join(dir, fmt.Sprint(count)))
+							if err != nil {
+								return err
+							}
+
+							count++
 						}
 					}
 				}
@@ -85,24 +117,7 @@ func gatherDuplicates(dir string) error {
 		return err
 	}
 
-	err = os.MkdirAll(dir, os.ModePerm)
-	if err != nil {
-		return err
-	}
-
-	for i, item := range items {
-		abs, err := filepath.Abs(item)
-		if err != nil {
-			return err
-		}
-
-		err = os.Symlink(abs, filepath.Join(dir, fmt.Sprint(i)))
-		if err != nil {
-			return err
-		}
-	}
-
-	fmt.Println("Gathered", len(items), "duplicates into '"+dir+"'")
+	fmt.Println("Gathered", count, "duplicates into '"+dir+"'")
 	return nil
 }
 
